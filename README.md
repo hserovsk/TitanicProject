@@ -1,7 +1,17 @@
-# Data Engineer Recruitment Task 
+# Data Engineer 
 This project was developed using Python3 language and Pyspark, SQLite, Pandas libraries
 
-
+# Solved problems/steps in that project
+1. Investigate the data structure and all the fields.
+2. The data structure needs to be flattened (to be ingested into SQLite
+database later).
+3. Fix data types for Age and Fare columns.
+4. Insert the data into a table.
+5. Prepare a SQL query (or series of queries) to:
+a. Remove duplicate rows.
+b. Validate Cabin, Age, and Embarked columns against being
+null.
+c. The final view should not contain Pclass and SibSp columns.
 
 # IMPORTANT
 This project was created on MacBook M1.
