@@ -7,6 +7,7 @@ from sql_functions import *
 from pyspark.sql.types import StringType, DateType, FloatType, LongType
 import pandas as pd
 from pandas import DataFrame
+
 pd.set_option('expand_frame_repr', False)
 
 # File location and type
@@ -18,93 +19,126 @@ infer_schema = "false"
 first_row_is_header = "false"
 delimiter = ","
 
-# Creating SparkSesion
-spark = SparkSession.builder.appName("TitanicDE").getOrCreate()
-spark.sparkContext.setLogLevel('WARN')
-# Loading json file to DataFrame
-df_json = spark.read.format(file_type) \
-    .option("inferSchema", infer_schema) \
-    .option("header", first_row_is_header) \
-    .option("sep", delimiter) \
-    .load(os.getcwd() + "/" + file)
 
-# Printing DataFrame Schemat
-print("###### Raw DataFrame Schema ######")
-df_json.printSchema()
+class TitanicSpark:
+    def __init__(self, file, file_type="json", infer_schema="false", first_row_is_header="false", delimiter=","):
+        self.file = file
+        self.file_type = file_type
+        self.infer_schema = infer_schema
+        self.first_row_is_header = first_row_is_header
+        self.delimiter = delimiter
+        try:
+            self.spark = SparkSession.builder.appName("TitanicDE").getOrCreate()
+            self.spark.sparkContext.setLogLevel('WARN')
+        except Exception as e:
+            print(f"Exception occured while creating Spark Session: {str(e)}")
+            raise
 
-# Flattening data structure and printing it
-dfTitanic_Flatt = df_json.select(col("Timestamp"),
-                                 col("numeric_columns.*"),
-                                 col("string_columns.*"))
-print("###### DataFrame Schema after Flattening ######")
-dfTitanic_Flatt.printSchema()
+    def load_data(self):
+        "Method that loads data from json file (from current directory/file) to df_json variable"
+        try:
+            df_json = self.spark.read.format(self.file_type) \
+                .option("inferSchema", self.infer_schema) \
+                .option("header", self.first_row_is_header) \
+                .option("sep", self.delimiter) \
+                .load(os.getcwd() + "/" + self.file)
+            df_json.printSchema()
+        except Exception as e:
+            print(f"Exception occured while loading data: {str(e)}")
+            raise
+        return df_json
 
-""" Unused code to check if there are any duplicates in DataFrame - no duplicates
-print("########### DROP DUPLICATES ##########")
-df_woduplicates = dfTitanic_Flatt.dropDuplicates()
-print(df_woduplicates.count())"""
+    def flatten_data(self, df_json):
+        "Method that flattens structure of the dataframe before inserting it into sqlite"
+        try:
+            df_flatt = df_json.select(col("Timestamp"),
+                                      col("numeric_columns.*"),
+                                      col("string_columns.*"))
+
+            df_flatt.printSchema()
+        except Exception as e:
+            print(f"Exception occured while flattening data: {str(e)}")
+            raise
+        return df_flatt
+
+    def fix_data_types(self, df_flatt):
+        "Method that is changing datatypes for Age column (to Long Type) and for Fare column (Float Type)"
+        try:
+            df_flatt2 = df_flatt \
+                .withColumn("Age",
+                            df_flatt["Age"]
+                            .cast(LongType())) \
+                .withColumn("Fare",
+                            df_flatt["Fare"]
+                            .cast(FloatType()))
+            df_flatt2.printSchema()
+        except Exception as e:
+            print(f"Exception occured while fixing data types: {str(e)}")
+            raise
+        return df_flatt2
+
+    def convert_to_pandas(self, df_flatt2):
+        "Converting Spark DataFrame to Pandas Dataframe"
+        return df_flatt2.toPandas()
+
+    def create_sql_connection(self):
+        "Method that creates connection with sqlite database and cursor object"
+        try:
+            conn = sqlite3.connect('titanic.db')
+            cur = conn.cursor()
+        except Exception as e:
+            print(f"Exception occured while creating connection with database or cursor: {str(e)}")
+            raise
+        return conn, cur
+
+    def execute_sql_commands(self, conn, cur, df_pd):
+        """Executing SQL commands from sql_functions.py module"""
+        try:
+            cur.execute(QUERY_CREATE_TABLE)
+            conn.commit()
+            df_pd.to_sql(table_name, conn, if_exists='replace', index=False)
+            cur.execute(QUERY_SELECT_UNIQUE)
+            conn.commit()
+
+            cur.execute(QUERY_CHECK_DUPLICATES)
+            conn.commit()
+
+            null_age = cur.execute(sql_null_age()).fetchall()
+            null_cabin = cur.execute(sql_null_cabin()).fetchall()
+            null_embarked = cur.execute(sql_null_embarked()).fetchall()
+        except Exception as e:
+            print(f"Exception occured during SQL operations: {str(e)}")
+            raise
+        return null_age, null_cabin, null_embarked
+
+    def print_final_view(self, conn):
+        "Printing final view from SQLite database"
+        try:
+            final_view = pd.read_sql_query(
+                "SELECT Timestamp,Parch,PassengerId,Survived,Age,Cabin,Embarked,Fare,Name,Sex,Ticket FROM titanic",
+                conn)
+            conn.commit()
+            print(final_view)
+        except Exception as e:
+            print(f"Exception occured while getting or printing final view: {str(e)}")
+            raise
+
+    def close_sql_connection(self, conn):
+        "Method that closes connection with database"
+        try:
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Exception occured while closing SQL connection: {str(e)}")
+            raise
 
 
-# Fixing data types for Age and Fare columns and printing schema after that
-dfTitanic_Flatt2 = dfTitanic_Flatt.withColumn("Age", dfTitanic_Flatt["Age"].cast('long'))
-dfTitanic_Flatt2 = dfTitanic_Flatt.withColumn("Fare", dfTitanic_Flatt["Fare"].cast('float'))
-
-dfTitanic_Flatt2 = dfTitanic_Flatt \
-    .withColumn("Age",
-                dfTitanic_Flatt["Age"]
-                .cast(LongType())) \
-    .withColumn("Fare",
-                dfTitanic_Flatt["Fare"]
-                .cast(FloatType()))
-
-print("###### DataFrame Schema after changing Age and Fare columns data types ######")
-dfTitanic_Flatt2.printSchema()
-
-# Converting DataFrame to Pandas DataFrame
-print("###### show before pandas conversion  ######")
-dfTitanic_Flatt2.show()
-dfTitanic_Flatt_pd = dfTitanic_Flatt2.toPandas()
-
-# SQL Creating Connection and Cursor for SQLite
-conn = sqlite3.connect('titanic.db')
-cur = conn.cursor()
-
-# Executing SQL Queries to create table
-cur.execute(QUERY_CREATE_TABLE)
-conn.commit()
-dfTitanic_Flatt_pd.to_sql(table_name, conn, if_exists='replace', index=False)
-cur.execute(QUERY_SELECT_UNIQUE)
-conn.commit()
-
-rows1 = cur.fetchall()
-
-# Functions to count null and not null values in Cabin, Age, Embarked columns
-cur.execute(QUERY_CHECK_DUPLICATES)
-conn.commit()
-null_age = cur.execute(sql_null_age()).fetchall()
-null_cabin = cur.execute(sql_null_cabin()).fetchall()
-null_embarked = cur.execute(sql_null_embarked()).fetchall()
-
-# Printing final view from SQL Query without Pclass and SibSp columns
-print("######### SQL FINAL VIEW ##########")
-final_view = pd.read_sql_query("SELECT Timestamp,Parch,PassengerId,Survived,Age,Cabin,Embarked,Fare,Name,Sex,Ticket FROM titanic", conn)
-conn.commit()
-print(final_view)
-print("#############################")
-
-# Printing null and not null values from Age, Cabin, Embarked columns
-print("""Showing null and not null number \n of records from specified column \n COLUMN NAME: \n (null_count,) \n (not_null_count,)""")
-print("AGE:")
-for value in null_age:
-    print(value)
-print("CABIN:")
-for value in null_cabin:
-    print(value)
-print("EMBARKED:")
-for value in null_embarked:
-    print(value)
-print("#############################")
-
-# Closing connection to db
-conn.commit()
-conn.close()
+titanic_processor = TitanicSpark(file='nested_titanic_data.json')
+df_json = titanic_processor.load_data()
+df_flatt = titanic_processor.flatten_data(df_json)
+df_flatt2 = titanic_processor.fix_data_types(df_flatt)
+df_pd = titanic_processor.convert_to_pandas(df_flatt2)
+conn, cur = titanic_processor.create_sql_connection()
+null_age, null_cabin, null_embarked = titanic_processor.execute_sql_commands(conn, cur, df_pd)
+titanic_processor.print_final_view(conn)
+titanic_processor.close_sql_connection(conn)
